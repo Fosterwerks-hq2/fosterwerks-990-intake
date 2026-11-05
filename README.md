@@ -5,7 +5,7 @@ section behind every answer, and proposes a prospect record that a person approv
 saved. Built on Claude with an MCP server, the Claude Agent SDK, retrieval and an eval.
 See [PLAN.md](PLAN.md) for the design and build order.
 
-**Status:** steps 1-4 of 5 done (data + retrieval, MCP server, Agent SDK agent, eval).
+**Status:** all 5 steps done. Write-up: [fosterwerks.com/work/intake-agent](https://fosterwerks.com/work/intake-agent).
 
 ## Setup
 
