@@ -1,0 +1,20 @@
+{
+  "flow": "990-judgment",
+  "metrics": [
+    {
+      "id": "correct",
+      "label": "Correct",
+      "kind": "binary"
+    },
+    {
+      "id": "sound",
+      "label": "Sound",
+      "kind": "binary"
+    }
+  ],
+  "perf_fields": [
+    "cost_usd",
+    "latency_s",
+    "tool_calls"
+  ]
+}

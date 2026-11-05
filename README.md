@@ -157,6 +157,38 @@ doesn't cover yet is judgment: fit notes, what data an organization holds, quest
 two sections. That's where a bigger model might earn its price, and it needs a rubric-graded
 set to find out.
 
+### Judgment eval (2026-11-05)
+
+```bash
+.venv/bin/python -m evals.judgment        # 15 cases (free)
+.venv/bin/python -m evals.run --flow 990-judgment --variant baseline --model claude-opus-5-5
+.venv/bin/python -m evals.run --flow 990-judgment --variant v1 --model claude-haiku-5-5
+```
+
+15 questions that need arithmetic across sections, knowledge of the form's layout, or inference
+([evals/judgment_cases.md](evals/judgment_cases.md)): share of revenue from government grants,
+share of expenses on programs, the largest program (line 4b, 4c and 4a in the three cases, so
+"the first one listed" fails), and whether the work involves sensitive personal data (3 yes, 3
+no, labelled by hand; one "no" is a name trap). `correct` is graded by code; `sound` by Claude
+Sonnet 5.5 (not a model under test) reading the answer and the full text of every cited section.
+The judge was checked on known-bad answers first; the pilot showed "I don't know" passing, so a
+fourth check ("answers the question") was added before the full runs.
+
+| | Claude Opus 5.5 | Claude Haiku 5.5 |
+|---|---|---|
+| Correct | 15/15 (95% CI 80-100%) | 13/15 (95% CI 62-96%) |
+| Sound (judge) | 15/15 | 12/15 |
+| Agent cost, 15 questions | $0.57 | $0.022 |
+| Median latency | 13.0 s | 7.0 s |
+
+Haiku's three problems: it called an adult foster care home "no sensitive data" while saying in
+the same answer that it likely holds residents' personal information (literal reading of "the
+filings don't say"); it attributed a detail to a section that doesn't contain it (right answer,
+judged unsound); and on one question it never produced valid structured output after four tries,
+so the app got no answer (counted as a failure). With 15 questions the gap isn't statistically
+significant, but the failure types are the ones that matter for judgment work. Reasonable split:
+Haiku for fact lookups, Opus where the agent has to judge (intake records, sensitive data).
+
 ## Known gaps (step 1)
 
 - 5 of 114 filings couldn't be fetched: the IRS index points to a batch that doesn't contain

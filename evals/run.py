@@ -42,6 +42,7 @@ PRICES = {
     "claude-sonnet-5-5": {"in": 2.00, "out": 10.00, "cache_read": 0.20, "cache_write": 2.50},
 }
 RETRYABLE = {429, 500, 502, 503, 529}
+MODEL_FAILURES = {"no_report", "error_max_turns", "error_max_structured_output_retries"}
 
 
 def cost(model: str, u: dict) -> float:
@@ -187,18 +188,36 @@ def summarize(variant_dir: Path) -> dict:
             if (variant_dir / "errors.jsonl").exists() else [])
     n, k = len(rows), sum(r["grade"]["correct"] for r in rows)
     lo, hi = wilson(k, n)
+    # Attempts that failed because of the model (no valid report, turn or structured-output
+    # limits) count as failed cases, not as missing ones, unless a later attempt succeeded.
+    done = {(r["prompt_id"], r["rep"]) for r in rows}
+    model_fail = {}
+    for line in errs:
+        e = json.loads(line)
+        if e["class"] in MODEL_FAILURES and (e["prompt_id"], e["rep"]) not in done:
+            model_fail[(e["prompt_id"], e["rep"])] = e
     if rows and rows[0]["tags"][0] == "judgment":
+        cases_by_id = {json.loads(x)["id"]: json.loads(x) for x in
+                       (ROOT / "evals" / "judgment_cases.jsonl").read_text().splitlines()}
+        rows = rows + [{"prompt_id": pid, "rep": rep, "tags": cases_by_id[pid]["tags"],
+                        "grade": {"correct": 0, "sound": 0}, "cost_usd": (e.get("cost_usd") or 0),
+                        "latency_s": None, "tool_calls": 0, "model_failure": e["class"]}
+                       for (pid, rep), e in model_fail.items()]
+        n, k = len(rows), sum(r["grade"]["correct"] for r in rows)
+
         def frac(rs, m): return f"{sum(r['grade'].get(m, 0) for r in rs)}/{len(rs)}"
         jc = sum(cost(r["judge_model"], r["judge_usage"]) for r in rows if r.get("judge_model") in PRICES)
         return {"variant": variant_dir.name, "model": rows[0]["model"], "cases": n,
-                "errors": len(errs), "correct": frac(rows, "correct"),
+                "errors": len(errs), "model_failures_counted": sorted(p for p, _ in model_fail),
+                "correct": frac(rows, "correct"),
                 "ci95_correct": [round(x, 3) for x in wilson(k, n)], "sound": frac(rows, "sound"),
                 "by_kind": {t: {"correct": frac([r for r in rows if r["tags"][1] == t], "correct"),
                                 "sound": frac([r for r in rows if r["tags"][1] == t], "sound")}
                             for t in dict.fromkeys(r["tags"][1] for r in rows)},
                 "agent_cost_usd": round(sum(r["cost_usd"] for r in rows), 4),
                 "judge_cost_usd": round(jc, 4),
-                "latency_s_median": sorted(r["latency_s"] for r in rows)[n // 2],
+                "latency_s_median": sorted(r["latency_s"] for r in rows if r["latency_s"])[
+                    len([r for r in rows if r["latency_s"]]) // 2],
                 "tool_calls_mean": round(sum(r["tool_calls"] for r in rows) / n, 2)}
     ans = [r for r in rows if r["tags"][0] != "not-found"]
     neg = [r for r in rows if r["tags"][0] == "not-found"]
