@@ -94,7 +94,8 @@ echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env          # gitignored
   `logs/agent/<session>.jsonl`; the last line has cost, tokens, turns and time.
 - **Typed output.** A `RunReport` (found, answer, value, citations, outcome, and whether any
   filing contained instructions) via `output_format`.
-- **Cost controls.** Claude Opus 5.5 at low effort, a short custom system prompt, prompt caching
+- **Cost controls.** Claude Haiku 5.5 by default since the eval (step 4); `--model claude-opus-5-5`
+  to switch. Low effort, a short custom system prompt, prompt caching
   (automatic), `max_budget_usd` per run (default $0.25).
 
 First runs (2026-11-05), all correct against the answer key:

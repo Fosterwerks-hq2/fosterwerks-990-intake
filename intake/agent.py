@@ -16,7 +16,8 @@ How it's put together
 - Logging: PreToolUse / PostToolUse / PostToolUseFailure hooks write every call to
   logs/agent/<session>.jsonl, ending with a result line (cost, tokens, turns, time).
 - Output: a typed RunReport (JSON schema via output_format) with citations.
-- Cost: Claude Opus 5.5 at low effort, max_budget_usd per run (default $0.25).
+- Cost: Claude Haiku 5.5 at low effort (the eval scored it equal to Opus 5.5 at 1/28 the
+  cost; --model claude-opus-5-5 to switch), max_budget_usd per run (default $0.25).
 """
 import argparse
 import asyncio
@@ -41,7 +42,7 @@ from .models import Citation, ProspectRecord
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs" / "agent"
-MODEL = "claude-opus-5-5"
+MODEL = "claude-haiku-5-5"  # eval 2026-11-05: same 39/39 as Opus 5.5 at 1/28 the cost
 SERVER = "irs990"
 T = f"mcp__{SERVER}__"
 READ_TOOLS = [f"{T}find_org", f"{T}search_filings", f"{T}get_section"]
