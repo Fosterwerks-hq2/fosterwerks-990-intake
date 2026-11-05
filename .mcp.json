@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "irs990": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["-m", "intake.mcp_server"],
+      "env": {"INTAKE_CLIENT": "claude-code"}
+    }
+  }
+}

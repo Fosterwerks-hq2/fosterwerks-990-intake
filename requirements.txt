@@ -1,1 +1,2 @@
 zipfile-deflate64
+mcp>=2.3,<3
