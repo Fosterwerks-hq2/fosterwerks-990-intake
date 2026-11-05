@@ -12,6 +12,7 @@ eval, not an assumption.
 """
 import csv
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -19,7 +20,7 @@ from pathlib import Path
 from .cohort import DATA
 from .parse import parse
 
-DB = DATA / "intake.sqlite"
+DB = Path(os.environ.get("INTAKE_DB", DATA / "intake.sqlite"))  # the eval points this at its own copy
 SCHEMA = """
 CREATE TABLE orgs (ein TEXT PRIMARY KEY, name TEXT NOT NULL, ntee TEXT);
 CREATE TABLE filings (ein TEXT NOT NULL, tax_year INTEGER NOT NULL, form TEXT NOT NULL,

@@ -20,6 +20,7 @@ How it's put together
 """
 import argparse
 import asyncio
+import dataclasses
 import getpass
 import json
 import os
@@ -29,9 +30,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from claude_agent_sdk import (ClaudeAgentOptions, ClaudeSDKClient, HookMatcher,
-                              PermissionResultAllow, PermissionResultDeny, ResultMessage,
-                              ToolPermissionContext)
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
+                              HookMatcher, PermissionResultAllow, PermissionResultDeny,
+                              ResultMessage, TextBlock, ThinkingBlock, ToolPermissionContext,
+                              ToolResultBlock, ToolUseBlock, UserMessage)
 from pydantic import BaseModel, Field
 
 from . import review
@@ -104,7 +106,8 @@ def _now() -> str:
 class Run:
     """One agent run: options, hooks, the approval gate, the log."""
 
-    def __init__(self, policy: str, budget: float, interactive_out=sys.stderr):
+    def __init__(self, policy: str, budget: float, interactive_out=sys.stderr, model: str = MODEL):
+        self.model = model
         self.policy = policy
         self.budget = budget
         self.out = interactive_out
@@ -203,7 +206,7 @@ class Run:
         if self.policy == "never":
             disallowed.append(PROPOSE)
         return ClaudeAgentOptions(
-            model=MODEL,
+            model=self.model,
             effort="low",
             system_prompt=SYSTEM,
             tools=[],                       # no Bash, files, web: only the MCP tools below
@@ -211,7 +214,9 @@ class Run:
             mcp_servers={SERVER: {"type": "stdio", "command": sys.executable,
                                   "args": ["-m", "intake.mcp_server"],
                                   "env": {"INTAKE_CLIENT": f"agent/{self.policy}",
-                                          "PYTHONPATH": str(ROOT)}}},
+                                          "PYTHONPATH": str(ROOT),
+                                          **{k: os.environ[k] for k in ("INTAKE_DB", "INTAKE_REVIEW_DB")
+                                             if k in os.environ}}}},
             strict_mcp_config=True,
             allowed_tools=allowed,
             disallowed_tools=disallowed,
@@ -232,12 +237,21 @@ class Run:
     async def run(self, prompt: str) -> dict:
         started = time.monotonic()
         result: ResultMessage | None = None
+        trace = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+        served: set[str] = set()
         async with ClaudeSDKClient(options=self.options()) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
                 if self.session is None and getattr(msg, "session_id", None):
-                    self.log({"event": "start", "session_id": msg.session_id, "model": MODEL,
+                    self.log({"event": "start", "session_id": msg.session_id, "model": self.model,
                               "policy": self.policy, "prompt": prompt})
+                if isinstance(msg, AssistantMessage):
+                    served.add(msg.model)
+                    _trace_assistant(trace, msg)
+                elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
+                    for b in msg.content:
+                        if isinstance(b, ToolResultBlock):
+                            trace.append({"role": "tool_result", "content": _text(b.content)[:6000]})
                 if isinstance(msg, ResultMessage):
                     result = msg
         summary = {
@@ -255,8 +269,12 @@ class Run:
             "result_text": (result.result or "")[:500] if result else None,
             "permission_denials": result.permission_denials if result else None,
         }
+        summary["served_models"] = sorted(served)
+        summary["model_usage"] = {k: (v if isinstance(v, dict) else dataclasses.asdict(v))
+                                  for k, v in (result.model_usage or {}).items()} if result else None
         self.log(summary)
         summary["log"] = str(self.log_path.relative_to(ROOT)) if self.log_path else None
+        summary["trace"] = trace
         return summary
 
 
@@ -304,6 +322,23 @@ def _review_id(resp) -> int | None:
     return int(ids[0]) if ids and ids[0].isdigit() else None
 
 
+def _trace_assistant(trace: list, msg) -> None:
+    """Append an assistant message to a transcript in the eval report's turn format."""
+    thinking = None
+    for b in msg.content:
+        if isinstance(b, ThinkingBlock):
+            thinking = (thinking or "") + (b.thinking or "")
+        elif isinstance(b, TextBlock) and b.text.strip():
+            trace.append({"role": "assistant", "content": b.text,
+                          **({"thinking": thinking} if thinking else {})})
+            thinking = None
+        elif isinstance(b, ToolUseBlock):
+            trace.append({"role": "tool_call", "name": b.name,
+                          "content": json.dumps(b.input, indent=2),
+                          **({"thinking": thinking} if thinking else {})})
+            thinking = None
+
+
 def _show(rec: ProspectRecord) -> str:
     money = lambda v: f"${v:,}" if v is not None else "not reported"  # noqa: E731
     lines = [
@@ -330,10 +365,11 @@ def main():
     ap.add_argument("--policy", choices=["ask", "queue"], default="ask",
                     help="intake only: approve in the terminal (ask) or leave it pending (queue)")
     ap.add_argument("--budget", type=float, default=0.25, help="max USD for this run")
+    ap.add_argument("--model", default=MODEL)
     a = ap.parse_args()
     policy = "never" if a.mode == "ask" else a.policy
     prompt = a.text if a.mode == "ask" else INTAKE_TASK.format(org=a.text)
-    out = asyncio.run(Run(policy, a.budget).run(prompt))
+    out = asyncio.run(Run(policy, a.budget, model=a.model).run(prompt))
     rep = out.get("report") or {}
     print(json.dumps(rep, indent=2) if rep else f"(no structured report) errors: {out['errors']}")
     print(f"\n{out['subtype']} | ${out['cost_usd'] or 0:.4f} | {out['turns']} turns | "

@@ -1,0 +1,20 @@
+{
+  "flow": "990-qa",
+  "metrics": [
+    {
+      "id": "correct",
+      "label": "Correct",
+      "kind": "binary"
+    },
+    {
+      "id": "grounded",
+      "label": "Grounded",
+      "kind": "binary"
+    }
+  ],
+  "perf_fields": [
+    "cost_usd",
+    "latency_s",
+    "tool_calls"
+  ]
+}

@@ -4,3 +4,8 @@ __pycache__/
 data/
 logs/
 *.sqlite
+
+# eval output (results stay local until a run is worth keeping)
+.claude/hillclimb/**/traces/
+.claude/hillclimb/**/report.html
+.claude/hillclimb/**/trajectory/
