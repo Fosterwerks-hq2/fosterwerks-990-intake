@@ -1,2 +1,3 @@
 zipfile-deflate64
 mcp>=2.3,<3
+claude-agent-sdk>=0.2.178

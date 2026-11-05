@@ -76,3 +76,43 @@ def decide(item_id: int, status: str, note: str | None = None, by: str | None = 
         if not n:
             raise ValueError(f"no pending item {item_id}")
         return _item(con.execute("SELECT * FROM review_queue WHERE id=?", (item_id,)).fetchone())
+
+
+def main():
+    """python -m intake.review [list [--status all|pending|approved|rejected]]
+       python -m intake.review show ID
+       python -m intake.review approve ID [--note TEXT]
+       python -m intake.review reject ID --note TEXT"""
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m intake.review", description=main.__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd")
+    p = sub.add_parser("list")
+    p.add_argument("--status", default="pending")
+    p = sub.add_parser("show")
+    p.add_argument("id", type=int)
+    for name in ("approve", "reject"):
+        p = sub.add_parser(name)
+        p.add_argument("id", type=int)
+        p.add_argument("--note", required=name == "reject",
+                       help="why (required to reject, so the agent's owner learns something)")
+    a = ap.parse_args()
+    cmd = a.cmd or "list"
+    if cmd == "list":
+        rows = items(None if getattr(a, "status", "pending") == "all" else getattr(a, "status", "pending"))
+        for i in rows:
+            r = i.record
+            print(f"#{i.id:<4} {i.status:9} {r.name[:40]:40} {r.tax_year} "
+                  f"rev {('$' + format(r.total_revenue, ',')) if r.total_revenue is not None else '-':>14} "
+                  f"staff {r.employees if r.employees is not None else '-':>4}  by {i.proposed_by}")
+        print(f"{len(rows)} item(s)")
+    elif cmd == "show":
+        i = next((x for x in items(None) if x.id == a.id), None)
+        print(i.model_dump_json(indent=2) if i else f"no item {a.id}")
+    else:
+        i = decide(a.id, "approved" if cmd == "approve" else "rejected", a.note)
+        print(f"#{i.id} {i.status} by {i.actioned_by} at {i.actioned_at}")
+
+
+if __name__ == "__main__":
+    main()
