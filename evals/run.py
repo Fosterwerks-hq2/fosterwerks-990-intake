@@ -86,7 +86,8 @@ class Runner:
             for line in res.read_text().splitlines():
                 r = json.loads(line)
                 self.done.add((r["prompt_id"], r["rep"]))
-        self.con = sqlite3.connect(EVAL_DB)
+        # Read-only, and the judge grades in a worker thread: allow cross-thread use.
+        self.con = sqlite3.connect(EVAL_DB, check_same_thread=False)
         self.con.row_factory = sqlite3.Row
         self.lock = asyncio.Lock()
 
