@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FLOW = ROOT / ".claude" / "hillclimb" / "990-qa"
+FLOWS = {"990-qa": "cases.jsonl", "990-judgment": "judgment_cases.jsonl"}
 EVAL_DB = ROOT / "data" / "eval.sqlite"
 
 # The agent's MCP server must read the eval copy (with the planted instruction), and nothing
@@ -32,12 +32,14 @@ os.environ["INTAKE_REVIEW_DB"] = str(Path(tempfile.mkdtemp()) / "review.sqlite")
 
 from intake.agent import Run  # noqa: E402
 
-from .grade import grade  # noqa: E402
+from . import grade as qa_grade  # noqa: E402
+from . import judgment  # noqa: E402
 
 # $ per million tokens (Claude API, first party). Cache writes 1.25x input (5-minute TTL).
 PRICES = {
     "claude-opus-5-5": {"in": 4.00, "out": 20.00, "cache_read": 0.20, "cache_write": 5.00},
     "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cache_read": 0.01, "cache_write": 0.125},
+    "claude-sonnet-5-5": {"in": 2.00, "out": 10.00, "cache_read": 0.20, "cache_write": 2.50},
 }
 RETRYABLE = {429, 500, 502, 503, 529}
 
@@ -68,8 +70,14 @@ def wilson(k: int, n: int) -> tuple[float, float]:
 
 
 class Runner:
-    def __init__(self, variant: str, model: str, reps: int, budget: float, timeout: float):
-        self.dir = FLOW / variant
+    def __init__(self, flow: str, variant: str, model: str, reps: int, budget: float, timeout: float):
+        self.flow = flow
+        self.dir = ROOT / ".claude" / "hillclimb" / flow / variant
+        self.judge_client = None
+        if flow == "990-judgment":
+            import anthropic
+            from intake.agent import _api_key
+            self.judge_client = anthropic.Anthropic(api_key=_api_key())
         (self.dir / "traces").mkdir(parents=True, exist_ok=True)
         self.model, self.reps, self.budget, self.timeout = model, reps, budget, timeout
         self.done = set()
@@ -127,7 +135,15 @@ class Runner:
             print(f"  ERROR {case['id']} rep{rep}: {err['class']} {err['detail'][:100]}")
             return
         rep_ = out["report"]
-        g = grade(case, rep_, self.con)
+        if self.flow == "990-judgment":
+            try:
+                g = await asyncio.to_thread(judgment.grade, case, rep_, self.con, self.judge_client)
+            except Exception as e:  # noqa: BLE001  a judge failure is not a model failure
+                await self._append("errors.jsonl", {**base, "class": "judge_error", "detail": repr(e)[:300]})
+                print(f"  ERROR {case['id']} rep{rep}: judge_error {e!r:.100}")
+                return
+        else:
+            g = qa_grade.grade(case, rep_, self.con)
         u = usage_for(self.model, out)
         trace_path = self.dir / "traces" / f"{case['id']}_rep{rep}.json"
         trace_path.write_text(json.dumps(out["trace"] + [
@@ -141,11 +157,14 @@ class Runner:
                "sdk_cost_usd": out.get("cost_usd"), "latency_s": out.get("seconds"),
                "tool_calls": tool_calls, "turns": out.get("turns"),
                "injection_flagged": rep_.get("instructions_in_filings"),
+               **({"judge_model": g["judge"]["model"], "judge_usage": g["judge"]["usage"],
+                   "judge_verdict": g["judge"]["verdict"]} if "judge" in g else {}),
                "meta": {"session": out.get("session_id"), "log": out.get("log"),
                         "expected": case["expected"].get("value")}}
         await self._append("results.jsonl", row)
         mark = "ok " if g["grade"]["correct"] else "MISS"
-        print(f"  {mark} {case['id']:12} {g['outcome']:16} ${row['cost_usd']:.4f} "
+        sound = f" sound={g['grade']['sound']}" if "sound" in g["grade"] else ""
+        print(f"  {mark} {case['id']:12} {g['outcome']:16}{sound} ${row['cost_usd']:.4f} "
               f"{row['latency_s']}s {tool_calls} tools")
 
     async def run(self, cases: list[dict], concurrency: int):
@@ -167,6 +186,19 @@ def summarize(variant_dir: Path) -> dict:
             if (variant_dir / "errors.jsonl").exists() else [])
     n, k = len(rows), sum(r["grade"]["correct"] for r in rows)
     lo, hi = wilson(k, n)
+    if rows and rows[0]["tags"][0] == "judgment":
+        def frac(rs, m): return f"{sum(r['grade'].get(m, 0) for r in rs)}/{len(rs)}"
+        jc = sum(cost(r["judge_model"], r["judge_usage"]) for r in rows if r.get("judge_model") in PRICES)
+        return {"variant": variant_dir.name, "model": rows[0]["model"], "cases": n,
+                "errors": len(errs), "correct": frac(rows, "correct"),
+                "ci95_correct": [round(x, 3) for x in wilson(k, n)], "sound": frac(rows, "sound"),
+                "by_kind": {t: {"correct": frac([r for r in rows if r["tags"][1] == t], "correct"),
+                                "sound": frac([r for r in rows if r["tags"][1] == t], "sound")}
+                            for t in dict.fromkeys(r["tags"][1] for r in rows)},
+                "agent_cost_usd": round(sum(r["cost_usd"] for r in rows), 4),
+                "judge_cost_usd": round(jc, 4),
+                "latency_s_median": sorted(r["latency_s"] for r in rows)[n // 2],
+                "tool_calls_mean": round(sum(r["tool_calls"] for r in rows) / n, 2)}
     ans = [r for r in rows if r["tags"][0] != "not-found"]
     neg = [r for r in rows if r["tags"][0] == "not-found"]
     lat = sorted(r["latency_s"] for r in rows)
@@ -196,8 +228,10 @@ def summarize(variant_dir: Path) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(prog="python -m evals.run")
+    ap.add_argument("--flow", default="990-qa", choices=sorted(FLOWS))
     ap.add_argument("--variant", default="baseline")
-    ap.add_argument("--model", default="claude-opus-5-5", choices=sorted(PRICES))
+    ap.add_argument("--model", default="claude-opus-5-5",
+                    choices=["claude-opus-5-5", "claude-haiku-5-5"])
     ap.add_argument("--reps", type=int, default=1)
     ap.add_argument("--concurrency", type=int, default=3)
     ap.add_argument("--budget", type=float, default=0.25, help="max USD per case")
@@ -205,24 +239,27 @@ def main():
     ap.add_argument("--only", help="comma-separated case IDs (pilot)")
     ap.add_argument("--summary-only", action="store_true")
     a = ap.parse_args()
-    cases = [json.loads(line) for line in (ROOT / "evals" / "cases.jsonl").read_text().splitlines()]
+    cases = [json.loads(line) for line in (ROOT / "evals" / FLOWS[a.flow]).read_text().splitlines()]
+    flow_dir = ROOT / ".claude" / "hillclimb" / a.flow
     if a.only:
         keep = set(a.only.split(","))
         cases = [c for c in cases if c["id"] in keep]
-    FLOW.mkdir(parents=True, exist_ok=True)
-    state = FLOW / "_state.json"
+    flow_dir.mkdir(parents=True, exist_ok=True)
+    state = flow_dir / "_state.json"
     if not state.exists():
+        second = ({"id": "sound", "label": "Sound", "kind": "binary"} if a.flow == "990-judgment"
+                  else {"id": "grounded", "label": "Grounded", "kind": "binary"})
         state.write_text(json.dumps({
-            "flow": "990-qa",
-            "metrics": [{"id": "correct", "label": "Correct", "kind": "binary"},
-                        {"id": "grounded", "label": "Grounded", "kind": "binary"}],
+            "flow": a.flow,
+            "metrics": [{"id": "correct", "label": "Correct", "kind": "binary"}, second],
             "perf_fields": ["cost_usd", "latency_s", "tool_calls"],
         }, indent=2))
     if not a.summary_only:
         t = time.monotonic()
-        asyncio.run(Runner(a.variant, a.model, a.reps, a.budget, a.timeout).run(cases, a.concurrency))
+        asyncio.run(Runner(a.flow, a.variant, a.model, a.reps, a.budget, a.timeout)
+                    .run(cases, a.concurrency))
         print(f"wall clock {time.monotonic() - t:.0f}s")
-    print(json.dumps(summarize(FLOW / a.variant), indent=2))
+    print(json.dumps(summarize(flow_dir / a.variant), indent=2))
 
 
 if __name__ == "__main__":
