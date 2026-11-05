@@ -5,7 +5,7 @@ section behind every answer, and proposes a prospect record that a person approv
 saved. Built on Claude with an MCP server, the Claude Agent SDK, retrieval and an eval.
 See [PLAN.md](PLAN.md) for the design and build order.
 
-**Status:** steps 1-2 of 5 done (data + retrieval, MCP server).
+**Status:** steps 1-3 of 5 done (data + retrieval, MCP server, Agent SDK agent).
 
 ## Setup
 
@@ -73,6 +73,42 @@ claude -p "What was Allied Media Projects' 2023 revenue? Cite section IDs." \
 
 First Claude Code run (2026-11-05): two tool calls, $24,072,145 revenue and 108 employees, both
 cited to `010559608/2023/990/p1`, and it flagged the return as amended.
+
+## Step 3: the agent (Claude Agent SDK)
+
+```bash
+echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env          # gitignored
+.venv/bin/python -m intake.agent ask "How many employees did Allied Media Projects report in 2023?"
+.venv/bin/python -m intake.agent intake "Allied Media Projects"              # you approve in the terminal
+.venv/bin/python -m intake.agent intake "Allied Media Projects" --policy queue  # leaves it pending
+.venv/bin/python -m intake.review list | show ID | approve ID | reject ID --note "why"
+```
+
+- **Only the MCP tools.** Built-in tools off (`tools=[]`), user settings not loaded
+  (`setting_sources=[]`), MCP config strict, and a `PreToolUse` hook that denies anything else.
+- **Approval gate.** Read tools are pre-approved; `propose_prospect` goes through `can_use_tool`.
+  In the terminal you see the record with its citations and approve, or decline with a reason
+  that goes back to the agent (which is told not to resubmit). Approving also marks the queue
+  item approved under your name. `--policy queue` skips the prompt and leaves it pending.
+- **Logging.** `PreToolUse`, `PostToolUse` and `PostToolUseFailure` hooks write every call to
+  `logs/agent/<session>.jsonl`; the last line has cost, tokens, turns and time.
+- **Typed output.** A `RunReport` (found, answer, value, citations, outcome, and whether any
+  filing contained instructions) via `output_format`.
+- **Cost controls.** Claude Opus 5.5 at low effort, a short custom system prompt, prompt caching
+  (automatic), `max_budget_usd` per run (default $0.25).
+
+First runs (2026-11-05), all correct against the answer key:
+
+| Run | Tool calls | Cost | Time | Result |
+|---|---|---|---|---|
+| Allied Media 2023 revenue + employees | 2 | $0.029 | 10 s | $24,072,145 and 108, cited to Part I and Part VIII |
+| Employees at an org not in the data | 1 | $0.015 | 8 s | not_found; didn't substitute a similar name |
+| Employees on a 990-EZ | 2 | $0.030 | 12 s | not_found; explained the EZ has no such line, cited $0 salaries |
+| Full intake, Allied Media | 3 | $0.072 | 15 s | Proposed 2024 record (86 staff, $20.3M revenue), passed the grounding check first time |
+
+One lesson from the first run: the SDK delivers `output_format` through a tool called
+`StructuredOutput`, and the fence hook blocked it. The agent stopped retrying, said a hook was
+blocking it, and gave the correct answer as plain text. The fence now allows that one tool.
 
 ## Known gaps (step 1)
 

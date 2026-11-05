@@ -137,8 +137,9 @@ class Run:
     # ---------------------------------------------------------------- hooks
 
     async def fence(self, inp, tool_use_id, ctx):
-        """Second fence: whatever the options say, only irs990 tools run."""
-        if not inp["tool_name"].startswith(T):
+        """Second fence: whatever the options say, only irs990 tools run (plus the SDK's own
+        StructuredOutput tool, which is how output_format delivers the typed report)."""
+        if not (inp["tool_name"].startswith(T) or inp["tool_name"] == "StructuredOutput"):
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                            "permissionDecision": "deny",
                                            "permissionDecisionReason": "Only irs990 tools are allowed"}}
