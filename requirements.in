@@ -1,0 +1,6 @@
+# Direct dependencies, loose ranges. Edit this file, then regenerate requirements.txt:
+#   pip install -r requirements.in && pip freeze --all | grep -viE '^(pip|setuptools|wheel)==' (keep this header)
+zipfile-deflate64
+mcp>=2.3,<3
+claude-agent-sdk>=0.2.178
+anthropic>=1.0
